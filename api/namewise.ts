@@ -1,31 +1,54 @@
-// api/namewise.ts — Vercel Node.js Serverless Function (REST만 사용)
-export default async function handler(req: any, res: any) {
-  // 프리플라이트(옵션): CORS 대비
+// api/namewise.ts  (Vercel Node.js Serverless Function)
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // CORS 헤더 설정
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // OPTIONS 요청 처리 (preflight)
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(204).end();
+    return res.status(200).end();
   }
 
-  if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).send("Missing GEMINI_API_KEY");
+  try {
+    // 요청 본문 검증
+    console.log("Request body:", req.body);
 
-  // Vercel 환경에서 body가 문자열/객체 케이스 모두 처리
-  let body: any = req.body;
-  if (typeof body === "string") {
-    try {
-      body = JSON.parse(body);
-    } catch {
-      body = {};
+    const { description, style } = (req.body ?? {}) as {
+      description?: string;
+      style?: string;
+    };
+
+    if (!description) {
+      return res.status(400).json({
+        error: "description is required",
+        received: { description, style },
+      });
     }
-  }
 
-  const { description, style } = body ?? {};
-  if (!description) return res.status(400).send("description is required");
+    // 환경 변수 확인
+    console.log("Environment variables check:", {
+      hasGeminiKey: !!process.env.GEMINI_API_KEY,
+      keyLength: process.env.GEMINI_API_KEY?.length || 0,
+    });
 
-  const prompt = `
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        error: "GEMINI_API_KEY environment variable is not set",
+      });
+    }
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // 무료 티어용 경량 모델
+
+    const prompt = `
 너는 프론트엔드 시니어 개발자다. 사용자의 자연어 설명을 바탕으로
 1) 컴포넌트명
 2) styled-components 네이밍 (S. 접두어)
@@ -44,38 +67,41 @@ export default async function handler(req: any, res: any) {
   "componentName": "string",
   "styledNames": ["S.Container", "S.*"],
   "fileName": "BaseName"
-}`.trim();
+}
+    `.trim();
 
-  const glReq = {
-    contents: [{ parts: [{ text: prompt }] }], // v1beta 형식
-    generationConfig: {
-      temperature: 0.4,
-      responseMimeType: "application/json",
-    },
-  };
+    console.log("Calling Gemini API with prompt length:", prompt.length);
 
-  try {
-    const r = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify(glReq),
-      }
-    );
+    const response = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.4,
+        responseMimeType: "application/json",
+      },
+    });
 
-    const text = await r.text(); // Gemini는 JSON 텍스트로 반환
-    if (!r.ok) return res.status(r.status).send(text);
+    const jsonText = response.response.text(); // Gemini는 텍스트로 JSON 반환
+    console.log("Gemini response:", jsonText);
+
+    // JSON 유효성 검증
+    try {
+      JSON.parse(jsonText);
+    } catch (parseError) {
+      console.error("Invalid JSON response from Gemini:", jsonText);
+      return res.status(500).json({
+        error: "Invalid response format from AI service",
+        details: String(parseError),
+      });
+    }
 
     res.setHeader("Content-Type", "application/json");
-    return res.status(200).send(text);
-  } catch (err: any) {
-    // 런타임 크래시 로그를 HTTP 본문으로 노출 (초기 디버깅 편의용)
-    return res
-      .status(500)
-      .send(`Runtime error: ${err?.message || String(err)}`);
+    return res.status(200).send(jsonText);
+  } catch (e: any) {
+    console.error("API Error:", e);
+    return res.status(500).json({
+      error: e?.message || "Server error",
+      stack: process.env.NODE_ENV === "development" ? e?.stack : undefined,
+      type: e?.constructor?.name || "Unknown",
+    });
   }
 }

@@ -12,9 +12,11 @@ const GlobalStyle = createGlobalStyle`
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  #root{min-width: 100%;}
 `;
 
 // ---------- styled-components ----------
+
 const S = {
   AppShell: styled.div`
     display: grid;
@@ -239,13 +241,49 @@ export default function App() {
     setError(null);
     setResult(null);
     try {
+      console.log("Sending request to /api/namewise with:", {
+        description: description.trim(),
+        style,
+      });
+
       const res = await fetch("/api/namewise", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: description.trim(), style }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const parsed: NamewiseResult = await res.json();
+
+      console.log("Response status:", res.status);
+      console.log(
+        "Response headers:",
+        Object.fromEntries(res.headers.entries())
+      );
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("API Error Response:", errorText);
+
+        let errorMessage = "API 요청이 실패했습니다.";
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.error || errorText;
+        } catch {
+          errorMessage = errorText;
+        }
+
+        throw new Error(`[${res.status}] ${errorMessage}`);
+      }
+
+      const responseText = await res.text();
+      console.log("Raw response:", responseText);
+
+      let parsed: NamewiseResult;
+      try {
+        parsed = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error("JSON Parse Error:", parseError);
+        throw new Error("서버 응답을 파싱할 수 없습니다: " + responseText);
+      }
+
       const componentName = toCase(style, parsed.componentName || "");
       const styledNames = (parsed.styledNames || []).map(
         (s) => `S.${toCase("PascalCase", s.replace(/^S\./, ""))}`
@@ -271,6 +309,7 @@ export default function App() {
       setHistory(next);
       localStorage.setItem("namewise.history", JSON.stringify(next));
     } catch (e: any) {
+      console.error("Generate function error:", e);
       setError(e?.message || "문제가 발생했어요.");
     } finally {
       setLoading(false);
