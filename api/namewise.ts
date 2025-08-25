@@ -3,23 +3,28 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS 헤더 설정
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // OPTIONS 요청 처리 (preflight)
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
   try {
+    // CORS 헤더 설정
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    // OPTIONS 요청 처리 (preflight)
+    if (req.method === "OPTIONS") {
+      return res.status(200).end();
+    }
+
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method Not Allowed" });
+    }
+
     // 요청 본문 검증
     console.log("Request body:", req.body);
+    console.log("Environment check:", {
+      nodeEnv: process.env.NODE_ENV,
+      hasGeminiKey: !!process.env.GEMINI_API_KEY,
+      keyLength: process.env.GEMINI_API_KEY?.length || 0,
+    });
 
     const { description, style } = (req.body ?? {}) as {
       description?: string;
@@ -98,6 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).send(jsonText);
   } catch (e: any) {
     console.error("API Error:", e);
+    console.error("Error stack:", e?.stack);
     return res.status(500).json({
       error: e?.message || "Server error",
       stack: process.env.NODE_ENV === "development" ? e?.stack : undefined,
